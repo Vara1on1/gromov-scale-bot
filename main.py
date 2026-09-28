@@ -1,5 +1,8 @@
 import asyncio
 import logging
+import os
+import socket
+from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -8,25 +11,23 @@ from aiogram.types import BotCommand
 
 from config import config
 from database import init_db
-from handlers import start, generator, club, profile, admin
+try:
+    from bot_handlers import (
+        start_router, generator_router, club_router, 
+        profile_router, admin_router
+    )
+except ImportError:
+    from handlers.start import router as start_router
+    from handlers.generator import router as generator_router
+    from handlers.club import router as club_router
+    from handlers.profile import router as profile_router
+    from handlers.admin import router as admin_router
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-async def set_bot_commands(bot: Bot):
-    commands = [
-        BotCommand(command="start", description="🚀 Главное меню"),
-        BotCommand(command="profile", description="👤 Личный кабинет и рефералка"),
-        BotCommand(command="club", description="💎 Закрытый клуб & База"),
-        BotCommand(command="admin", description="👑 Админ-панель")
-    ]
-    await bot.set_my_commands(commands)
-
-import os
-from aiohttp import web
 
 async def health_check(request):
     return web.Response(text="OK - Gromov Scale Bot is running!")
@@ -42,6 +43,15 @@ async def start_web_server():
     await site.start()
     logger.info(f"Health check HTTP server running on port {port}")
 
+async def set_bot_commands(bot: Bot):
+    commands = [
+        BotCommand(command="start", description="🚀 Главное меню"),
+        BotCommand(command="profile", description="👤 Личный кабинет и рефералка"),
+        BotCommand(command="club", description="💎 Закрытый клуб & База"),
+        BotCommand(command="admin", description="👑 Админ-панель")
+    ]
+    await bot.set_my_commands(commands)
+
 async def main():
     logger.info("Initializing database...")
     await init_db()
@@ -52,10 +62,22 @@ async def main():
     except Exception as e:
         logger.warning(f"Could not start health check server (non-critical): {e}")
     
+    # Smart proxy handling: use proxy if reachable, otherwise direct connection
     session = None
     if config.PROXY_URL:
-        logger.info(f"Using proxy: {config.PROXY_URL}")
-        session = AiohttpSession(proxy=config.PROXY_URL)
+        try:
+            parts = config.PROXY_URL.split("://")[-1].split(":")
+            host = parts[0]
+            port = int(parts[1])
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.5)
+                if s.connect_ex((host, port)) == 0:
+                    logger.info(f"Using proxy: {config.PROXY_URL}")
+                    session = AiohttpSession(proxy=config.PROXY_URL)
+                else:
+                    logger.info("Proxy not reachable, using direct connection (Cloud mode)")
+        except Exception:
+            logger.info("Direct connection enabled")
         
     bot = Bot(
         token=config.BOT_TOKEN,
@@ -66,11 +88,11 @@ async def main():
     dp = Dispatcher()
     
     # Register routers in priority order
-    dp.include_router(admin.router)
-    dp.include_router(start.router)
-    dp.include_router(generator.router)
-    dp.include_router(club.router)
-    dp.include_router(profile.router)
+    dp.include_router(admin_router)
+    dp.include_router(start_router)
+    dp.include_router(generator_router)
+    dp.include_router(club_router)
+    dp.include_router(profile_router)
     
     while True:
         try:
